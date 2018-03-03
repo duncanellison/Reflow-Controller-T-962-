@@ -1,0 +1,22 @@
+﻿Public Class frmSetLiquidus
+    Private Sub btnSetLiquidusCancel_Click(sender As Object, e As EventArgs) Handles btnSetLiquidusCancel.Click
+        Me.Close()
+    End Sub
+
+    Private Sub btnSetLiquidus_Click(sender As Object, e As EventArgs) Handles btnSetLiquidus.Click
+        If txtSetLiquidus.Text IsNot "" Then
+            Try
+                ' Clear the last line
+                Main.ProfileChart.Series("Liquidus").Points.Clear()
+                ' Set the new one
+                Dim liquidus As Double = Convert.ToDouble(txtSetLiquidus.Text.Trim)
+                Main.ProfileChart.Series("Liquidus").Points.AddXY(0, liquidus)
+                Main.ProfileChart.Series("Liquidus").Points.AddXY(GlobalParameters.MaxTimePoints, liquidus)
+                Me.Close()
+            Catch
+                MsgBox("Incorrect Input")
+            End Try
+        End If
+
+    End Sub
+End Class

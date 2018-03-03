@@ -1,0 +1,17 @@
+Profile,3
+Name,SAC305 Low Density Boards (235°C Max / 65s Reflow)
+MaxTimePoints,500
+MinFanSpeed,10
+Chart,1,0,25,25
+Chart,2,30,46,96
+Chart,3,60,77,150
+Chart,4,90,112,165
+Chart,5,120,150,180
+Chart,6,150,191,223
+Chart,7,180,218,250
+Chart,8,210,163,207
+Chart,9,240,100,134
+Chart,10,270,53,80
+Chart,11,300,20,37
+Chart,12,310,0,0
+Liquidus,217

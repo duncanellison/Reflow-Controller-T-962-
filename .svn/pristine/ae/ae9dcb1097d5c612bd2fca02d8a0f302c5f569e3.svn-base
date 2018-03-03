@@ -1,0 +1,58 @@
+﻿
+Public Class GlobalParameters
+    Public Shared version_major = 1
+    Public Shared version_minor = 1
+
+    'Serial Port Variables
+    Public Shared ComOpen As Boolean              ' Is true if COM port is open
+
+    ' Misc Public Variables
+    Public Shared LastCommand As String = ""                ' Used to remember the last command
+    Public Shared MaxTempAchieved As Int32 = 0           ' Used to give maximum temperature reached during the cycle
+    Public Shared MaxProfileTemp As Single = 0.0            ' Used to store the maximum temperature that *should* have been achieved 
+    Public Shared MaxTempTC1 As Int32 = 0                   ' Used to store the maximum temperature TC1 achieved 
+    Public Shared MaxTempTC2 As Int32 = 0                   ' Used to store the maximum temperature TC1 achieved 
+    Public Shared MaxTempTC3 As Int32 = 0                   ' Used to store the maximum temperature TC1 achieved 
+    Public Shared MaxTempTC4 As Int32 = 0                   ' Used to store the maximum temperature TC1 achieved 
+    Public Shared LiquidusTemp As Double = 0.0              ' Used to store the liquidus temperature of the solder
+    Public Shared LiquidusTime As Integer = 0               ' Used to store the Time Above Liquidus (TAL)
+    Public Shared LiquidusStart As Single = 0.0             ' Time the liquidus temperature was acheived
+    Public Shared LiquidusEnd As Single = 0.0               ' Time temp fell below Liquidus 
+    Public Shared LiquidusAchieved As Boolean = False       ' Did we acheive liquidus ?
+
+    ' Liquidus levels for each profile
+    Public Shared Profile0Liquidus As Integer = 0
+    Public Shared Profile1Liquidus As Integer = 0
+    Public Shared Profile2Liquidus As Integer = 0
+    Public Shared Profile3Liquidus As Integer = 0
+    Public Shared Profile4Liquidus As Integer = 0
+    Public Shared Profile5Liquidus As Integer = 0
+    Public Shared Profile6Liquidus As Integer = 0
+
+    ' Profile names - note these have to wait to be retrieved from the oven as they are used 
+    Public Shared ProfileName0 As String = "Unknown"
+    Public Shared ProfileName1 As String = "Unknown"
+    Public Shared ProfileName2 As String = "Unknown"
+    Public Shared ProfileName3 As String = "Unknown"
+    Public Shared ProfileName4 As String = "Unknown"
+    Public Shared ProfileName5 As String = "Unknown"
+    Public Shared ProfileName6 As String = "Unknown"
+
+
+    Public Shared RunTime As Single = 0.0
+    Public Shared MaxTimePoints As Single = 0.0             ' Maximum number of time points (seconds) in the graph
+    Public Shared MachineID As String = ""                  ' Machine identity (to differentiate between more than one oven)
+    Public Shared RunNumber As Long = 0                     ' Global variable for the run number
+
+    Public Shared profileTempStoreSize As Integer = 1000
+    Public Shared profileTempStore(profileTempStoreSize) As String           ' Place to store the incoming data while the reflow is running
+    Public Shared idxProfileTempStore As Integer = 0        ' Index for storing incoming data
+
+    ' Flags
+    Public Shared flgProfileChangedExternally As Boolean = False
+    Public Shared flgShowAirThermocouples As Boolean = True
+    Public Shared flgShowBoardThermocouples As Boolean = True
+    Public Shared flgShowTCMax As Boolean = True
+    Public Shared flgReducePoints As Boolean = True
+
+End Class

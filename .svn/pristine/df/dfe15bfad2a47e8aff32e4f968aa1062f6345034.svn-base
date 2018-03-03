@@ -1,0 +1,14 @@
+﻿
+Public Class GlobalParameters
+    Public Shared version_major = 1
+    Public Shared version_minor = 1
+
+    'Serial Port Variables
+    Public Shared ComOpen As Boolean              ' Is true if COM port is open
+
+    ' Misc Public Variables
+    Public Shared LastCommand As String = ""              ' Used to remember the last command
+    Public Shared MaxTempAchieved As Single = 0.0           ' Used to give maximum temperature reached during the cycle
+    Public Shared MaxProfileTemp As Single = 0.0            ' Used to store the maximum temperature that *should* have been achieved 
+    Public Shared RunTime As Single = 0.0
+End Class

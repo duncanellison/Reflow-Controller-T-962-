@@ -1,0 +1,62 @@
+﻿Public Class frmThermoDisplay
+
+    Private Sub Main_Load(sender As System.Object, e As System.EventArgs) Handles MyBase.Load
+
+        ' Recall parameter settings from the global storage and set before showing form
+        If GlobalParameters.flgShowAirThermocouples = True Then
+            chkDisplayAirTemperatures.Checked = True
+        Else
+            chkDisplayAirTemperatures.Checked = False
+        End If
+
+        If GlobalParameters.flgShowBoardThermocouples = True Then
+            chkDisplayBoardTemperatures.Checked = True
+        Else
+            chkDisplayBoardTemperatures.Checked = False
+        End If
+
+        If GlobalParameters.flgShowTCMax = True Then
+            chkDisplayTCMax.Checked = True
+        Else
+            chkDisplayTCMax.Checked = False
+        End If
+
+        ' Centre to parent
+        Me.CenterToParent()
+
+        'Now Show
+        Me.Show()
+    End Sub
+
+    Private Sub btnThermoCancel_Click(sender As Object, e As EventArgs)
+        Me.Close()
+    End Sub
+
+    Private Sub btnThermoOK_Click(sender As Object, e As EventArgs) Handles btnThermoOK.Click
+        Me.Close()
+    End Sub
+
+    Private Sub chkDisplayAirTemperatures_CheckedChanged(sender As Object, e As EventArgs) Handles chkDisplayAirTemperatures.CheckedChanged
+        If chkDisplayAirTemperatures.Checked Then
+            GlobalParameters.flgShowAirThermocouples = True
+        Else
+            GlobalParameters.flgShowAirThermocouples = False
+        End If
+    End Sub
+
+    Private Sub chkDisplayBoardTemperatures_CheckedChanged(sender As Object, e As EventArgs) Handles chkDisplayBoardTemperatures.CheckedChanged
+        If chkDisplayBoardTemperatures.Checked Then
+            GlobalParameters.flgShowBoardThermocouples = True
+        Else
+            GlobalParameters.flgShowBoardThermocouples = False
+        End If
+    End Sub
+
+    Private Sub chkDisplayTCMax_CheckedChanged(sender As Object, e As EventArgs) Handles chkDisplayTCMax.CheckedChanged
+        If chkDisplayTCMax.Checked Then
+            GlobalParameters.flgShowTCMax = True
+        Else
+            GlobalParameters.flgShowTCMax = False
+        End If
+    End Sub
+End Class

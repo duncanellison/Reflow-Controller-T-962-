@@ -1,0 +1,36 @@
+﻿Public Class frmMiscOptions
+
+    Private Sub Main_Load(sender As System.Object, e As System.EventArgs) Handles MyBase.Load
+        txtMachineID.Text = GlobalParameters.MachineID
+        txtRunNumber.Text = GlobalParameters.RunNumber.ToString
+        If GlobalParameters.flgReducePoints Then
+            chkReduceOvenPoints.Checked = True
+        Else
+            chkReduceOvenPoints.Checked = False
+        End If
+
+        Me.Show()
+    End Sub
+
+    Private Sub btnCancel_Click(sender As Object, e As EventArgs) Handles btnCancel.Click
+        Me.Close()
+    End Sub
+
+    Private Sub btnOK_Click(sender As Object, e As EventArgs) Handles btnOK.Click
+        GlobalParameters.MachineID = txtMachineID.Text
+        GlobalParameters.RunNumber = Convert.ToInt32(txtRunNumber.Text.Trim)
+        If chkReduceOvenPoints.Checked = True Then
+            GlobalParameters.flgReducePoints = True
+        Else
+            GlobalParameters.flgReducePoints = False
+        End If
+        Me.Close()
+    End Sub
+
+    Private Sub btnReset_Click(sender As Object, e As EventArgs) Handles btnReset.Click
+        My.Settings.RunNumber = 0
+        txtRunNumber.Text = My.Settings.RunNumber.ToString
+
+    End Sub
+
+End Class

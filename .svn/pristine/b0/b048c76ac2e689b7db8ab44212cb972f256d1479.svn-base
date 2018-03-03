@@ -1,0 +1,782 @@
+﻿
+' This program is intended for use with a Beta Layout V3 Reflow Oven Controller
+' Written by : Duncan Ellison
+' V1.0.0
+' Master Copy held at : https://subversion.assembla.com/svn/colnewater/T-962ReflowController
+'----------------------------------------------------------------------------------
+
+
+Imports System.IO.Ports
+Imports System.Threading
+Imports System.Threading.Thread
+Imports System.String
+Imports ReflowController.GlobalParameters
+Imports ReflowController.GlobalFunctions
+Imports System.IO
+Imports System.IO.IsolatedStorage
+Imports Microsoft.VisualBasic.FileIO
+
+
+Public Class Main
+
+    ' Receive buffer Variables
+    Dim RXArray(2047) As Char               ' Text buffer. Must be global to be accessible from other threads.
+    Dim RXCnt As Integer = 0                ' Receive buffer pointer. Must be global too.
+    Dim ReadBuffer As String = ""
+    Dim Terminator() As Char = {vbCr, ","}
+    Dim tokens As String()
+    Dim command As String()
+    Dim RxString As String = ""
+    Dim flgRxStringComplete As Boolean = False
+
+    ' Make a new System.IO.Ports.SerialPort instance, which is able to fire events.
+    Dim WithEvents COMPort As New SerialPort
+
+    '------------------------------------------------------------------------------
+    ' FORM LOAD/ CLOSE
+    '------------------------------------------------------------------------------
+    ' ON LOAD
+    Private Sub Main_Load(sender As System.Object, e As System.EventArgs) Handles MyBase.Load
+
+        ' Display the s/w version
+        ToolStripStatusLabel1.Text = "Software Version : " & My.Application.Info.Version.Major & "." & My.Application.Info.Version.Minor & "." & My.Application.Info.Version.MajorRevision & "." & My.Application.Info.Version.MinorRevision & " / " & My.Application.Info.AssemblyName
+
+        ToolStripStatusLabel2.Text = "           Status : Standby"
+
+        txtPhase.ForeColor = Color.DimGray
+        txtPhase.Text = "Standby"
+        txtProfileSelected.Text = ""
+
+        ' COM PORT SET UP
+        ' This subroutine is activated when the form is loaded. It does all the basic initializations.
+        ' Note! Baud Rates above 115.2 KBaud requires a special UART like e.g. 16C650, 16C750, 16C850 or 16C950 and a special driver.
+        ' Note that the standard UART 16C550 has no hardware flow control - except for UART's from Texas Instruments.
+        ' The minimum FIFO size is calculated on the basis of a 1.4 mS response time, which is the absolute minimum for Windows applications.
+
+        For Each COMString As String In My.Computer.Ports.SerialPortNames ' Load all available COM ports.
+            COMPortsBox.Items.Add(COMString)
+        Next
+
+        COMPortsBox.Sorted = True
+
+        BaudRateBox.Items.Add("110")
+        BaudRateBox.Items.Add("300")
+        BaudRateBox.Items.Add("600")
+        BaudRateBox.Items.Add("1200")
+        BaudRateBox.Items.Add("1800")
+        BaudRateBox.Items.Add("2400")
+        BaudRateBox.Items.Add("4800")
+        BaudRateBox.Items.Add("7200")
+        BaudRateBox.Items.Add("9600")
+        BaudRateBox.Items.Add("14400")
+        BaudRateBox.Items.Add("19200")      ' Min. FIFO size 3 Bytes (8030 or 8530)
+        BaudRateBox.Items.Add("38400")
+        BaudRateBox.Items.Add("57600")      ' Min. FIFO size 8 bytes
+        BaudRateBox.Items.Add("115200")     ' Min. FIFO size 16 bytes (16C550)
+        BaudRateBox.Items.Add("230400")     ' Min. FIFO size 32 bytes (16C650)
+        BaudRateBox.Items.Add("460800")     ' Min. FIFO size 64 bytes (16C750)
+        BaudRateBox.Items.Add("921600")     ' Min. FIFO size 128 bytes (16C850 or 16C950)
+
+        imgConnectStatus.Image = My.Resources.Red_Light
+
+        'Retrieve settings from last time run or set defaults if not available
+
+        COMPortsBox.Text = My.Settings.lastComPort.ToString
+
+        ' Make sure we start up from a known condition
+        txtPhase.Text = "Standby"
+        txtPhase.ForeColor = Color.LightBlue
+
+        'Set Max text to "-" as it may be random at this point
+        txtMaxTemp.Text = "Max Oven : - °C" & vbCrLf & "Max Profile : - °C"
+
+        ' Set up seconds timer for 1S tick
+        Timer1.Interval = 1000
+
+
+
+    End Sub
+
+
+    ' ON APP CLOSE
+    Private Sub FormIsClosing(ByVal sender As Object, ByVal e As ComponentModel.CancelEventArgs) Handles MyBase.Closing
+        ' This subroutine is activated when the form is closed. It closes the COM port. Without such a close command,
+        ' the garbage collector may close the COM port while it is still in use!
+
+        If MessageBox.Show("Do you really want to close the Reflow Controller ?", "Close", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1) = Windows.Forms.DialogResult.No Then
+            e.Cancel = True
+        Else
+            ' Save settings and close down the program gracefully
+            My.Settings.lastComPort = COMPortsBox.Text
+            My.Settings.lastBaudRate = BaudRateBox.Text
+
+            ' Close COM port on a new thread when the form is terminated with [X]
+            Dim t As New Thread(AddressOf ClosePort)
+            t.Start()
+        End If
+    End Sub
+
+    '------------------------------------------------------------------------------
+    ' MESSAGE HANDLING
+    '------------------------------------------------------------------------------
+
+    Private Sub DataReceivedHandler(sender As Object, e As SerialDataReceivedEventArgs)
+        Dim RXByte As Byte
+        Try
+            Do
+                '----- Start of communication protocol handling -----------------------------------------------------------
+                Try
+                    Do
+                        RXByte = COMPort.ReadByte
+                        Select Case ChrW(RXByte)
+                            Case vbLf
+                                flgRxStringComplete = True
+                                Exit Do
+                            Case vbCr
+                                flgRxStringComplete = True
+                                Exit Do
+                            Case Else
+                                RXArray(RXCnt) = ChrW(RXByte)
+                                RXCnt = RXCnt + 1
+                        End Select
+                    Loop Until (COMPort.BytesToRead = 0)
+                Catch ex As Exception
+                    imgConnectStatus.Image = My.Resources.Red_Light
+                End Try
+
+
+                If flgRxStringComplete Then
+                    ' We carried on reading until we hit a <LF>, so now we have a full command 
+                    ' Copy it to a safe place, so that we can continue to manipulate the buffer pointers
+                    RxString = ConvertCharArrayToString(RXArray, RXCnt)
+
+                    ' Zero the incoming array pointer
+                    RXCnt = 0
+                    flgRxStringComplete = False
+
+                    ' Then send it off to Display worker to display it on the UI 
+                    Me.Invoke(New MethodInvoker(AddressOf Display)) ' Start "Display" on the UI thread
+
+                    ' Now parse the recieved data and do something useful with it
+
+                    tokens = RxString.Split(Terminator)
+
+                    ' Check for 'Selected Profile' message and adjust heading appropriately
+                    Dim testString() As String = RxString.Split(":")
+
+                    If Mid(testString(0).ToLower.Trim, 1, 16) = "selected profile" Then
+                        txtProfileSelected.Invoke(Sub() txtProfileSelected.Text = testString(1).Trim) ' Cross thread call
+                    End If
+
+                    'Check for 'Stopping bake/reflow' message
+                    If RxString.ToLower.Trim = "stopping bake/reflow" Then
+                        txtPhase.Invoke(Sub() txtPhase.Text = "MANUAL STOP") ' Cross thread call
+                        Timer1.Stop()
+                    End If
+
+                    'Check for 'Bake complete' message
+                    If RxString.ToLower.Trim = "bake complete" Then
+                        txtPhase.Invoke(Sub() txtPhase.Text = "BAKE COMPLETE") ' Cross thread call
+                        Timer1.Stop()
+                    End If
+
+                    'Check for 'Reflow done' message
+                    If RxString.ToLower.Trim = "reflow done" Then
+                        txtPhase.Invoke(Sub() txtPhase.Text = "COMPLETE") ' Cross thread call
+                        Timer1.Stop()
+                    End If
+
+                    'Check for 'Selected Profile n: xxxxxxxxx' message ' this means profile was changed by the command line and we need to match it in the UI
+                    If Mid(RxString.ToLower.Trim, 1, 16) = "selected profile" Then
+                        Dim myProfile As Int16 = Convert.ToInt16(Mid(RxString.ToLower.Trim, 18, 1))
+                        If (myProfile > 0 AndAlso myProfile < 7) Then
+                            cboProfile.Invoke(Sub() cboProfile.SelectedIndex = myProfile)
+                        End If
+                    End If
+
+                    Try
+                        ' Handle incoming strings of data from the reflow process 
+                        ' [use 'try' in case random chars cause issues]
+                        If Not IsNullOrEmpty(tokens(10)) Then
+                            Select Case tokens(10).ToLower.Trim
+                                Case "reflow", "bake", "bake-preheat", "standby"
+                                    Me.Invoke(New MethodInvoker(AddressOf ProcessProfileMsg))
+                                Case Else
+                                    'Unknown parameter line - ignoreplease select 
+                            End Select
+                        End If
+                    Catch
+                    End Try
+
+                End If
+                '----- End of communication protocol handling -------------------------------------------------------------
+            Loop Until (COMPort.BytesToRead = 0)  ' Don't return if more bytes have become available in the meantime
+        Catch
+            'Nothing
+        End Try
+    End Sub
+
+    ' Process incoming message from the controller
+    Private Sub ProcessProfileMsg()
+        Try
+            Select Case tokens(10).ToLower.Trim
+
+                Case "bake-preheat"
+                    txtPhase.Text = "Preheat"
+                    txtPhase.ForeColor = Color.Orange
+                    updateGraph("Target", tokens(0), tokens(5))
+                    updateTemp(tokens(5))
+                    updateGraph("OvenTemp", tokens(0), tokens(6))
+                    updateTemp(tokens(6))
+                    UpdateTempBar(tokens(7))
+                    UpdateFanBar(tokens(8))
+                    UpdateProbes(tokens(6), tokens(1), tokens(2), tokens(3), tokens(4))
+                Case "bake"
+                    txtPhase.Text = "Bake"
+                    txtPhase.ForeColor = Color.Red
+                    updateGraph("Target", tokens(0), tokens(5))
+                    updateTemp(tokens(5))
+                    updateGraph("OvenTemp", tokens(0), tokens(6))
+                    updateTemp(tokens(6))
+                    UpdateTempBar(tokens(7))
+                    UpdateFanBar(tokens(8))
+                    UpdateProbes(tokens(6), tokens(1), tokens(2), tokens(3), tokens(4))
+
+                Case "reflow"
+                    txtPhase.Text = "Reflow"
+                    txtPhase.ForeColor = Color.Red
+                    updateGraph("Target", tokens(0), tokens(5))
+                    updateTemp(tokens(5))
+                    updateGraph("OvenTemp", tokens(0), tokens(6))
+                    updateTemp(tokens(6))
+                    UpdateTempBar(tokens(7))
+                    UpdateFanBar(tokens(8))
+                    UpdateProbes(tokens(6), tokens(1), tokens(2), tokens(3), tokens(4)) ' 7 = Current calculated temp, resst are TC1 - 4
+
+                Case "standby"
+                    txtPhase.Text = "Standby"
+                    txtPhase.ForeColor = Color.Blue
+                    updateTemp(tokens(6))
+                    UpdateTempBar(tokens(7))
+                    UpdateFanBar(tokens(8))
+                    UpdateProbes(tokens(6), tokens(1), tokens(2), tokens(3), tokens(4))
+            End Select
+        Catch
+        End Try
+    End Sub
+
+    ' Text display routine, which appends the received string to any text in the Received TextBox.
+    Private Sub Display()
+        txtBoxReceived.AppendText(RxString & vbLf)
+    End Sub
+
+    ' Checks for a <CR> in the input string and on finding it, send the whole string plus CR to the device
+    Private Sub txtBoxTransmit_KeyDown(ByVal sender As Object, ByVal e As KeyEventArgs) Handles txtBoxTransmit.KeyDown
+
+        If e.KeyCode = Keys.Up Then
+            txtBoxTransmit.Text = LastCommand
+        End If
+
+        If e.KeyCode = Keys.Enter Then
+            e.SuppressKeyPress = True
+
+            LastCommand = txtBoxTransmit.Text
+            command = txtBoxTransmit.Text.Split(Terminator)
+
+            Select Case command(0)
+                Case "Special"                                           '  "Look for a special commend and treat it differently"
+                    ProcessSpecialCommand()
+                Case Else                   ' It was a regular command, so just send
+                    Dim SendText As String = txtBoxTransmit.Text.ToString & vbLf
+                    SendCommand(SendText)
+                    txtBoxTransmit.Text = ""
+            End Select
+        End If
+    End Sub
+
+    ' Process Special Commands
+    Private Sub ProcessSpecialCommand()
+        Dim SendText As String = ""
+        MsgBox("You entered an unsupported command")
+
+    End Sub
+
+
+    '------------------------------------------------------------------------------
+    ' SERIAL PORT ROUTINES
+    '------------------------------------------------------------------------------
+
+    ' This subroutine handles a change of COM ports.
+    Private Sub PortSelection(ByVal sender As Object, ByVal e As EventArgs) Handles COMPortsBox.SelectedIndexChanged
+        If COMPort.IsOpen Then
+            Try
+                COMPort.RtsEnable = False
+                COMPort.DtrEnable = False
+                ClosePort()
+            Catch
+                MsgBox("Error closing COM Port")
+            End Try
+
+            ' NOTE. Because of the use of Invoke, the port should normally be closed from a different thread, 
+            ' but to ensure that the following delay works, this is not done in this case.
+            ' Empty the message queue before the UI thread goes to sleep to update the modem lamps and the ComboBox.
+            Application.DoEvents()
+            Sleep(200)                      ' Wait 0.2 second for port to close as this does not happen immediately.
+        End If
+
+        ' If this is the very first time, we need to set the defaults, 
+        If BaudRateBox.Text = "" Then
+            BaudRateBox.Text = "115200"
+        End If
+
+        Try
+            With COMPort
+                .PortName = COMPortsBox.Text
+                .BaudRate = CInt(BaudRateBox.Text)                  ' ! Needs to be 9600 for T962
+                .DataBits = 8                                       ' ! Needs to be 8 for T-962
+                .StopBits = StopBits.One                            ' ! Needs to be 1 for T-962
+                .Parity = Parity.None                               ' ! Needs to be None for T-962
+                .Handshake = Handshake.None                         ' ! Needs to be 'None' for T-962
+                .WriteTimeout = 2000                                ' Max time to wait for CTS = 2 sec.
+                .ReadBufferSize = 3000                              ' Necessary buffer size for 16C950 UART at 921.6 kbit/s = 16384
+                .WriteBufferSize = 3000
+                AddHandler .DataReceived, AddressOf DataReceivedHandler
+            End With
+
+            COMPort.Open()
+        Catch ex As Exception
+            MsgBox(ex.Message)
+        End Try
+
+        ' Check if we successfully opened the COM port and if yes, then set the green light
+        If COMPort.IsOpen Then
+            imgConnectStatus.Image = My.Resources.Green_Light
+            ToolStripStatusLabel2.Text = "    Status : Connected"
+        Else
+            imgConnectStatus.Image = My.Resources.Red_Light
+            ToolStripStatusLabel2.Text = "    Status : Not Connected"
+        End If
+    End Sub
+
+    ' Close COM Port
+    Private Sub ClosePort()
+        ' This subroutine is used to close the COM port. Because the program uses Invoke instead of BeginInvoke, this
+        ' routine is usually called on a separate (new) thread to prevent a close-down deadlock.
+        If COMPort.IsOpen Then
+            COMPort.Close()
+            imgConnectStatus.Image = My.Resources.Red_Light
+            ToolStripStatusLabel2.Text = "    Status : Not Connected"
+        End If
+    End Sub
+
+    ' This subroutine handles a change in Baud Rate.
+    Private Sub BaudRateSelection(ByVal sender As Object, ByVal e As EventArgs)
+        COMPort.BaudRate = CInt(BaudRateBox.Text)
+    End Sub
+
+
+    '------------------------------------------------------------------------------
+    ' UI INTERACTION
+    '------------------------------------------------------------------------------
+
+    ' This subroutine saves the content of the Received TextBox
+
+    Private Sub btnSaveLog_Click(sender As Object, e As EventArgs) Handles btnSaveLog.Click
+        Dim SaveFileDialog1 As New SaveFileDialog()
+        SaveFileDialog1.Filter = "Text Files (*.txt)|*.txt"
+        SaveFileDialog1.Title = "Save Received As"
+        If SaveFileDialog1.ShowDialog() = System.Windows.Forms.DialogResult.OK _
+            And SaveFileDialog1.FileName.Length > 0 Then
+            My.Computer.FileSystem.WriteAllText(SaveFileDialog1.FileName, txtBoxReceived.Text, False) ' Overwrite file
+        End If
+    End Sub
+
+    ' STANDBY TRACING
+    Private Sub chkStandbyTracing_CheckedChanged(sender As System.Object, e As System.EventArgs) Handles chkStandbyTracing.CheckedChanged
+
+        Dim result As String
+
+        If COMPort.IsOpen Then
+            If chkStandbyTracing.Checked = True Then
+                SendCommand("quiet")
+            Else
+                SendCommand("quiet")
+            End If
+            Application.DoEvents()
+        Else
+            result = MessageBox.Show("Connect to the Controller first !", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1)
+        End If
+
+    End Sub
+
+    ' REFLOW BUTTON
+    Private Sub btnReflow_Click(sender As Object, e As EventArgs) Handles btnReflow.Click
+
+        Select Case btnReflow.Text
+            Case "STOP"
+                btnReflow.BackColor = Color.YellowGreen
+                btnReflow.Text = "REFLOW"
+                SendCommand("stop" & vbLf)
+                Timer1.Stop()
+            Case "REFLOW"
+                btnReflow.Text = "STOP"
+                btnReflow.BackColor = Color.Red
+                SendCommand("reflow" & vbLf)
+                RunTime = 0
+                Timer1.Start()
+        End Select
+
+
+    End Sub
+
+    ' PROFILE CHANGE
+    Private Sub cboProfile_SelectedIndexChanged(sender As Object, e As EventArgs) Handles cboProfile.SelectedIndexChanged
+
+        Select Case cboProfile.Text.ToLower
+            Case "0"
+                SendCommand("select profile 0")
+            Case "1"
+                SendCommand("select profile 1")
+            Case "2"
+                SendCommand("select profile 2")
+            Case "3"
+                SendCommand("select profile 3")
+            Case "4"
+                SendCommand("select profile 4")
+            Case "5"
+                SendCommand("select profile 5")
+            Case "6"
+                SendCommand("select profile 6")
+        End Select
+
+    End Sub
+
+    ' CLEAR BUTTON
+    Private Sub ClearButton_Click(sender As System.Object, e As System.EventArgs) Handles ClearButton.Click
+        txtBoxReceived.Text = ""
+        ProfileChart.Series("OvenTemp").Points.Clear()
+        ProfileChart.Series("Target").Points.Clear()
+        txtPhase.ForeColor = Color.DimGray
+        txtPhase.Text = "Standby"
+        MaxTempAchieved = 0
+        MaxProfileTemp = 0
+        txtMaxTemp.Text = "Max Oven : - °C" & vbCrLf & "Max Profile : - °C"
+        RunTime = 0
+        ToolStripStatusLabel2.Text = "    Status : Standby"
+    End Sub
+
+    ' DISABLE USER CONTROLS
+    Private Sub DisableControls()
+        txtBoxTransmit.Enabled = False
+        COMPortsBox.Enabled = False
+        BaudRateBox.Enabled = False
+        txtBoxReceived.Enabled = False
+        ClearButton.Enabled = False
+        ProfileChart.Enabled = False
+    End Sub
+
+    ' ENABLE USER CONTROLS
+    Private Sub EnableControls()
+        txtBoxTransmit.Enabled = True
+        COMPortsBox.Enabled = True
+        BaudRateBox.Enabled = True
+        txtBoxReceived.Enabled = True
+        ClearButton.Enabled = True
+        ProfileChart.Enabled = True
+    End Sub
+
+    '------------------------------------------------------------------------------
+    ' TOOLSTRIP
+    '------------------------------------------------------------------------------
+
+    Private Sub QuitToolStripMenuItem_Click(sender As System.Object, e As System.EventArgs) Handles QuitToolStripMenuItem.Click
+        Me.Close()
+    End Sub
+
+    Private Sub AboutToolStripMenuItem1_Click(sender As System.Object, e As System.EventArgs) Handles AboutToolStripMenuItem1.Click
+        Dim AboutForm As New About
+        AboutForm.Show()
+    End Sub
+
+    Private Sub CommandsToolStripMenuItem_Click(sender As Object, e As System.EventArgs) Handles CommandsToolStripMenuItem.Click
+        Dim HelpForm As New CommandHelp
+        HelpForm.Show()
+    End Sub
+
+    Private Sub LoadProfileToolStripMenuItem1_Click(sender As System.Object, e As System.EventArgs) Handles LoadProfileToolStripMenuItem1.Click
+
+        Dim Result As DialogResult
+        Dim OpenFileDialog1 As New OpenFileDialog
+        Dim SendText As String
+
+        'Check if connected to the controller first 
+
+        If COMPort.IsOpen Then
+            Try
+                'Set Defaults
+                OpenFileDialog1.Filter = "Oven Profile (*.pfl)|*.pfl"
+                OpenFileDialog1.FilterIndex = 1
+                OpenFileDialog1.Multiselect = False
+
+                ' Call ShowDialog.
+                Result = OpenFileDialog1.ShowDialog()
+
+                ' Test result
+                Dim mypath As String = ""
+
+                If Result = Windows.Forms.DialogResult.OK Then
+
+                    ' Get the file name.
+                    mypath = OpenFileDialog1.FileName
+                End If
+
+
+                'Erase the old profile
+                'ProfileChart.Series("Profile").Points.Clear()
+                ProfileChart.Series("Profile").ChartType = DataVisualization.Charting.SeriesChartType.Range
+                ProfileChart.Series("Profile").Color = Color.LightGreen
+                ProfileChart.Series("Profile").BorderWidth = 2
+                ProfileChart.Series("Profile").BackImageTransparentColor = Color.LightGreen
+
+                'Put up Wait cursor and disable UI
+                Me.Cursor = Cursors.WaitCursor
+                DisableControls()
+
+                ' Read the profile and add it to the chart
+                Using MyReader As New Microsoft.VisualBasic.FileIO.TextFieldParser(mypath)
+                    MyReader.TextFieldType = Microsoft.VisualBasic.FileIO.FieldType.Delimited
+                    MyReader.SetDelimiters(",")
+                    Dim currentRow() As String
+                    While Not MyReader.EndOfData
+                        Try
+                            currentRow = MyReader.ReadFields()
+                            Select Case currentRow(0).ToLower
+                                Case "name"
+
+                                Case "maxtimepoints"
+                                    ProfileChart.ChartAreas("OvenTemp").AxisX.Maximum = currentRow(1)
+                                Case ("chart")
+                                    ' This is a chart record, convert to integers to enter into chart points
+                                    Dim intpoint = Convert.ToInt32(currentRow(1))       'Point number
+                                    Dim inttime = Convert.ToInt32(currentRow(2))        'Time in Seconds
+                                    Dim intlo = Convert.ToInt32(currentRow(3))          'Low bound of range
+                                    Dim inthi = Convert.ToInt32(currentRow(4))          'High bound of range
+                                    'Enter onto chart
+                                    ProfileChart.Series("Profile").Points.InsertXY(intpoint, inttime, intlo, inthi)
+                                Case "controller"
+                                    Select Case currentRow(1).ToLower
+                                        Case "profile"
+                                            SendText = "settings " & currentRow(2) & vbCr
+                                            SendCommand(SendText)
+                                            wait(100)               ' Allow 1000ms for the controller to switch profiles
+
+                                        Case Else
+                                            SendText = currentRow(1) & " " & currentRow(2) & vbCr
+                                            SendCommand(SendText)
+                                            wait(200)
+                                            SendCommand(vbCr)
+                                            wait(200)
+                                    End Select
+
+                                Case Else
+                                    Result = MessageBox.Show("Bad record in profile file", "Input Error", MessageBoxButtons.OK, MessageBoxIcon.Error, MessageBoxDefaultButton.Button1)
+
+                            End Select
+
+                        Catch ex As Microsoft.VisualBasic.FileIO.MalformedLineException
+                            MsgBox("Line " & ex.Message & " in profile is invalid.  Skipping")
+                        End Try
+                    End While
+                End Using
+
+            Catch ex As Exception
+                MsgBox(ex.Message & " Check CTS signal or set Flow Control to None.")
+            End Try
+        Else
+            imgConnectStatus.Image = My.Resources.Red_Light
+            ToolStripStatusLabel2.Text = "    Status : Disconnected"
+            Result = MessageBox.Show("You must connect to a controller before loading a profile", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+
+        End If
+
+        'End wait cursor and re-enable controls
+        Me.Cursor = Cursors.Arrow
+        EnableControls()
+    End Sub
+
+    Private Sub SaveToolStripMenuItem1_Click(sender As Object, e As EventArgs) Handles SaveToolStripMenuItem1.Click
+
+        ' This subroutine saves the content of the Received TextBox
+        Dim SaveFileDialog1 As New SaveFileDialog()
+        SaveFileDialog1.Filter = "Text Files (*.txt)|*.txt"
+        SaveFileDialog1.Title = "Save Received As"
+        If SaveFileDialog1.ShowDialog() = System.Windows.Forms.DialogResult.OK _
+            And SaveFileDialog1.FileName.Length > 0 Then
+            My.Computer.FileSystem.WriteAllText(SaveFileDialog1.FileName, txtBoxReceived.Text, False) ' Overwrite file
+        End If
+    End Sub
+
+    '------------------------------------------------------------------------------
+    ' MISCELLANEOUS PROCEDURES
+    '------------------------------------------------------------------------------
+    ' Loops for a specified period of time (milliseconds)
+    Private Sub wait(ByVal interval As Integer)
+        Dim sw As New Stopwatch
+        sw.Start()
+        Do While sw.ElapsedMilliseconds < interval
+            ' Allows UI to remain responsive
+            Application.DoEvents()
+        Loop
+        sw.Stop()
+    End Sub
+
+    'Updates the graph
+    Private Sub updateGraph(ByVal mySeries, ByVal myTime, ByVal myTemp)
+
+        myTime = myTime.ToString.Trim
+        myTemp = myTemp.ToString.Trim
+
+        Dim WorkTemp As Int32
+        Try
+            myTime = Convert.ToSingle(myTime)
+            WorkTemp = Convert.ToSingle(myTemp)
+        Catch
+            ' Bad Data from the controller
+        End Try
+
+        Select Case mySeries
+            Case "OvenTemp"
+                If WorkTemp > MaxTempAchieved Then
+                    MaxTempAchieved = WorkTemp
+                End If
+            Case "Target"
+                If WorkTemp > MaxProfileTemp Then
+                    MaxProfileTemp = WorkTemp
+                End If
+        End Select
+
+        'Update Maximum Temperature reached
+        txtMaxTemp.Text = "Max Oven : " & MaxTempAchieved.ToString.TrimEnd & " °C" & vbCrLf & "Max Profile : " & MaxProfileTemp.ToString.TrimEnd & " °C"
+
+        ' Add Oven point to Graph
+        Try
+            ProfileChart.Series(mySeries).Points.AddXY(myTime, WorkTemp)
+        Catch
+            MsgBox("Unable to update graph")
+        End Try
+
+    End Sub
+
+    'Updates the Temperature display in the top RH corner
+    Private Sub updateTemp(ByVal Temp)
+
+        Dim intTemp As Integer = CType(Temp, Integer)
+        txtTemp.Text = intTemp.ToString & "°C"
+
+        Select Case intTemp
+            Case 0 To 50
+                txtTemp.BackColor = Color.Green
+            Case 51 To 100
+                txtTemp.BackColor = Color.Orange
+            Case 101 To 150
+                txtTemp.BackColor = Color.OrangeRed
+            Case 151 To 200
+                txtTemp.BackColor = Color.Red
+            Case 201 To 999
+                txtTemp.BackColor = Color.DarkRed
+        End Select
+
+    End Sub
+
+    'updates temp bar
+    Private Sub UpdateTempBar(temp As Int16)
+        Dim percent As Int16 = temp / 254 * 100
+        barHeat.Value = percent
+        lblHeat.Text = percent.ToString & "%"
+    End Sub
+
+    'updates fan bar
+    Private Sub UpdateFanBar(speed As Int16)
+        Dim percent As Int16 = speed / 254 * 100
+        barFan.Value = percent
+        lblFan.Text = percent.ToString & "%"
+    End Sub
+
+    'Updates probes graph
+    Private Sub UpdateProbes(strCalcTemp As String, strTC1 As String, strTC2 As String, strTC3 As String, strTC4 As String)
+        'CalcTemp is the calculated temperature being used by the over
+
+        Dim TC1 As Double = Convert.ToDouble(strTC1.Trim)
+        Dim TC2 As Double = Convert.ToDouble(strTC2.Trim)
+        Dim TC3 As Double = Convert.ToDouble(strTC3.Trim)
+        Dim TC4 As Double = Convert.ToDouble(strTC4.Trim)
+        Dim OvenTemp As Double = Convert.ToDouble(strCalcTemp.Trim)
+
+        Dim Average As Double = 0
+
+        If (TC3 = 0 AndAlso TC4 = 0) Then
+            ' If only getting a reading from TC1 and TC2, then disable TC3 and TC4
+            lblTC3Head.Enabled = False
+            lblTC4Head.Enabled = False
+            lblTC3.Enabled = False
+            lblTC4.Enabled = False
+
+            '   Average = (TC1 + TC2) / 2
+        Else
+            ' Here we are getting input from all four TCs 
+            lblTC3Head.Enabled = True
+            lblTC4Head.Enabled = True
+            '  Average = (TC1 + TC2 + TC3 + TC4) / 4
+        End If
+
+        Dim TC1delta As Double = TC1 - OvenTemp
+        Dim TC2delta As Double = TC2 - OvenTemp
+        Dim TC3delta As Double = TC3 - OvenTemp
+        Dim TC4delta As Double = TC4 - OvenTemp
+
+        lblTC1.Text = TC1delta.ToString("##.#")
+        lblTC2.Text = TC2delta.ToString("##.#")
+
+        If lblTC3.Enabled = True Then
+            lblTC3.Text = TC3delta.ToString("##.#")
+        Else
+            lblTC3.Text = "-"
+        End If
+
+        If lblTC3.Enabled = True Then
+            lblTC4.Text = TC4delta.ToString("##.#")
+        Else
+            lblTC3.Text = "-"
+        End If
+
+
+
+    End Sub
+
+    'Send command To the controller
+    Private Sub SendCommand(TextToSend As String)
+        If COMPort.IsOpen Then
+            Try
+                COMPort.Write(TextToSend)
+            Catch ex As Exception
+                MsgBox(ex.Message & " Communications Error - Check Cable")
+            End Try
+        Else
+            imgConnectStatus.Image = My.Resources.Red_Light
+            ToolStripStatusLabel2.Text = "    Status : Disconnected"
+            MsgBox("COM port is closed. Please select a COM port")
+
+        End If
+    End Sub
+
+    ' Timer for Run Time counter (in Seconds)
+    Private Sub Timer1_Tick(sender As Object, e As EventArgs) Handles Timer1.Tick
+        RunTime = RunTime + 1
+        ToolStripStatusLabel2.Text = "            Run Time = " & RunTime.ToString
+    End Sub
+
+
+End Class
+
+
+
