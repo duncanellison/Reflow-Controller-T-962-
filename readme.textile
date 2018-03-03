@@ -1,3 +1,9 @@
-h1. Assembla.readme
+Reflow-Controller
 
-In assembla you can use "textile(Textile Basics)":http://bit.ly/textile-basics, "html(Html Basics)":http://bit.ly/html-basics or "markdown(Markdown Basics)":http://bit.ly/markdown-basics to add some sugar to your readme files. Just add the extention to your readme file, so we can recognize the markup you want to use!
+PC Based software controller for T962 series reflow ovens
+
+This software is offered as-is and without any support or warranty.
+
+It was written using licensable .net extension components which will not compile properly unless you obtain a licence from DevComponents (https://www.devcomponents.com/dotnetbar/). You may choose to edit these controls out or simply rewite the application using this as a guide.
+
+Either way, please don't ask for help as I'm not in a position at the moment to assist.
